@@ -40,6 +40,25 @@ let
             type = types.path;
             description = "Path to app-owned OpenBao setup script.";
           };
+
+          approle = {
+            roleName = mkOption {
+              type        = types.str;
+              description = "AppRole role name. Used for core-tier instances.";
+            };
+            tokenTtl = mkOption {
+              type    = types.str;
+              default = "1h";
+            };
+            tokenMaxTtl = mkOption {
+              type    = types.str;
+              default = "4h";
+            };
+            secretIdNumUses = mkOption {
+              type    = types.int;
+              default = 0;
+            };
+          };
         };
 
         zitadel = {
@@ -78,9 +97,52 @@ let
             type = types.bool;
             description = "Whether to auto-wire SPIRE workload entries for this instance.";
           };
+
           clientHostName = mkOption {
             type = types.str;
-            description = "Hostname of the machine where the workload runs. Used for SPIRE parentId derivation.";
+            description = "Hostname of the machine where the workload runs.";
+          };
+
+          workloadUser = mkOption {
+            type        = types.nullOr types.str;
+            default     = null;
+            description = ''
+              Unix user the service process runs as. Used for unix:user SPIRE selector.
+              For systemd DynamicUser services: set to null — DynamicUser assigns an
+              ephemeral UID that SPIRE cannot predict. Use workloadExecutable instead.
+              At least one of workloadUser or workloadExecutable must be non-null when
+              spire.enable = true.
+            '';
+          };
+
+          workloadExecutable = mkOption {
+            type        = types.nullOr types.str;
+            default     = null;
+            description = ''
+              Absolute path to the binary SPIRE sees via /proc/<pid>/exe.
+              Used as the unix:path SPIRE selector. For DynamicUser services,
+              this is the ONLY selector available. For BEAM apps, use the flake's
+              lib.beamSmpPath helper (see flake.nix).
+              Null: omit unix:path selector.
+            '';
+          };
+
+          spiffeIdSuffix = mkOption {
+            type        = types.str;
+            description = ''
+              Suffix appended to the trust domain for this instance's SPIFFE ID.
+              Default: "workload/<name>". Override for legacy paths during migration.
+            '';
+          };
+
+          provisioningUser = mkOption {
+            type        = types.nullOr types.str;
+            default     = null;
+            description = ''
+              If set, generates a second SPIRE entry for boot-time scripts calling
+              spiffe-agent api fetch jwt (e.g. secrets-fetch.sh).
+              Selectors: ["unix:user:<provisioningUser>" "unix:path:<spire>/bin/spiffe-agent"].
+            '';
           };
         };
 
@@ -114,9 +176,11 @@ let
         zitadel.enable = mkDefault (config.tier != "core");
         spire.enable = mkDefault (config.tier != "core");
         spire.clientHostName = mkDefault outerConfig.networking.hostName;
+        spire.spiffeIdSuffix = mkDefault "workload/${name}";
         openbao.address = mkDefault outerConfig.services.app-infra.defaults.openbao.address;
         openbao.skipVerify = mkDefault outerConfig.services.app-infra.defaults.openbao.skipVerify;
         openbao.tokenFile = mkDefault outerConfig.services.app-infra.defaults.openbao.tokenFile;
+        openbao.approle.roleName = mkDefault name;
       };
     };
 
@@ -144,8 +208,13 @@ let
       ${optionalString inst.openbao.skipVerify "export BAO_SKIP_VERIFY=true"}
       export ZITADEL_URL="${inst.zitadel.address}"
       export APP_NAME="${name}"
-      export CLIENT_HOST="${inst.spire.clientHostName}"
-      export SPIFFE_ID="spiffe://${cfg.trustDomain}/workload/${name}"
+      ${optionalString (inst.tier == "core") ''
+        export APPROLE_ROLE_NAME="${inst.openbao.approle.roleName}"
+      ''}
+      ${optionalString (inst.tier != "core") ''
+        export CLIENT_HOST="${inst.spire.clientHostName}"
+        export SPIFFE_ID="spiffe://${cfg.trustDomain}/${inst.spire.spiffeIdSuffix}"
+      ''}
       export APP_INFRA_HELPERS="${cfg._helpersPackage}"
       export PATH="${
         makeBinPath [
@@ -181,7 +250,7 @@ let
         if inst.zitadel.projectName != null then inst.zitadel.projectName else name
       }"
       export CLIENT_HOST="${inst.spire.clientHostName}"
-      export SPIFFE_ID="spiffe://${cfg.trustDomain}/workload/${name}"
+      export SPIFFE_ID="spiffe://${cfg.trustDomain}/${inst.spire.spiffeIdSuffix}"
       export APP_INFRA_HELPERS="${cfg._helpersPackage}"
       export PATH="${
         makeBinPath [
@@ -245,6 +314,16 @@ in
       }) enabledInstances;
     }
 
+    # SPIRE workload selector assertion
+    {
+      assertions = mapAttrsToList (name: inst: {
+        assertion = !inst.spire.enable
+          || inst.spire.workloadUser != null
+          || inst.spire.workloadExecutable != null;
+        message = "app-infra: instance '${name}' has spire.enable = true but neither workloadUser nor workloadExecutable is set";
+      }) enabledSpireInstances;
+    }
+
     # OpenBao setup services
     {
       systemd.services = mapAttrs' (
@@ -304,17 +383,31 @@ in
       );
     })
 
-    # SPIRE auto-wiring
+    # SPIRE auto-wiring — only active when spire-infra module is also loaded
     (optionalAttrs (options ? services && options.services ? spire-infra) {
       services.spire-infra.server.entries = mkIf (config.services.spire-infra.server.enable or false) (
         concatLists (
-          mapAttrsToList (name: inst: [
-            {
-              spiffeId = "spiffe://${cfg.trustDomain}/workload/${name}";
-              parentId = "spiffe://${cfg.trustDomain}/spire/agent/host/${inst.spire.clientHostName}";
-              selectors = [ "unix:uid:0" ];
+          mapAttrsToList (name: inst:
+            # Runtime entry — unix:user omitted for DynamicUser services (workloadUser = null)
+            [{
+              spiffeId  = "spiffe://${cfg.trustDomain}/${inst.spire.spiffeIdSuffix}";
+              parentId  = "spiffe://${cfg.trustDomain}/spire/agent/host/${inst.spire.clientHostName}";
+              selectors =
+                lib.optional (inst.spire.workloadUser != null)
+                  "unix:user:${inst.spire.workloadUser}"
+                ++ lib.optional (inst.spire.workloadExecutable != null)
+                  "unix:path:${inst.spire.workloadExecutable}";
+            }]
+            # Provisioning entry (spiffe-agent-based secret fetch scripts)
+            ++ lib.optional (inst.spire.provisioningUser != null) {
+              spiffeId  = "spiffe://${cfg.trustDomain}/${inst.spire.spiffeIdSuffix}";
+              parentId  = "spiffe://${cfg.trustDomain}/spire/agent/host/${inst.spire.clientHostName}";
+              selectors = [
+                "unix:user:${inst.spire.provisioningUser}"
+                "unix:path:${pkgs.spire}/bin/spiffe-agent"
+              ];
             }
-          ]) enabledSpireInstances
+          ) enabledSpireInstances
         )
       );
     })
