@@ -15,5 +15,8 @@
       # nixosModule (singular) → outputs.nixosModules.default
       # To export multiple modules, use nixosModules = { foo = ./nix/foo.nix; bar = ./nix/bar.nix; };
       nixosModule = ./nix/module.nix;
+
+      packages.app-infra-helpers =
+        pkgs: pkgs.writeShellScript "app-infra-helpers" (builtins.readFile ./nix/helpers.sh);
     };
 }

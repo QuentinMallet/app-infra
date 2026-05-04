@@ -12,8 +12,6 @@ let
   cfg = config.services.app-infra;
   outerConfig = config;
 
-  appInfraHelpers = pkgs.writeShellScript "app-infra-helpers" (builtins.readFile ./helpers.sh);
-
   instanceModule =
     { name, config, ... }:
     {
@@ -148,7 +146,7 @@ let
       export APP_NAME="${name}"
       export CLIENT_HOST="${inst.spire.clientHostName}"
       export SPIFFE_ID="spiffe://${cfg.trustDomain}/workload/${name}"
-      export APP_INFRA_HELPERS="${appInfraHelpers}"
+      export APP_INFRA_HELPERS="${cfg._helpersPackage}"
       export PATH="${
         makeBinPath [
           pkgs.openbao
@@ -184,7 +182,7 @@ let
       }"
       export CLIENT_HOST="${inst.spire.clientHostName}"
       export SPIFFE_ID="spiffe://${cfg.trustDomain}/workload/${name}"
-      export APP_INFRA_HELPERS="${appInfraHelpers}"
+      export APP_INFRA_HELPERS="${cfg._helpersPackage}"
       export PATH="${
         makeBinPath [
           pkgs.openbao
@@ -200,6 +198,13 @@ let
 in
 {
   options.services.app-infra = {
+    _helpersPackage = mkOption {
+      type = types.package;
+      internal = true;
+      default = pkgs.writeShellScript "app-infra-helpers" (builtins.readFile ./helpers.sh);
+      description = "Helpers script derivation.";
+    };
+
     trustDomain = mkOption {
       type = types.str;
       default = "infra.tailnet";
