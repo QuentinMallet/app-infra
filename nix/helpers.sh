@@ -119,6 +119,20 @@ bao_upsert_secret() {
     || bao kv put "${kv_path}" "${key}=${value}"
 }
 
+# bao_ensure_approle_role <name> <policies> [token_ttl] [token_max_ttl] [secret_id_num_uses]
+# Create or update an AppRole role. Idempotent.
+# secretId delivery is out-of-band (bao-distribute-secrets.sh).
+bao_ensure_approle_role() {
+  local name="$1" policies="$2"
+  local token_ttl="${3:-1h}" token_max_ttl="${4:-4h}" secret_id_num_uses="${5:-0}"
+  echo "[app-infra] configuring AppRole role '${name}'"
+  bao write "auth/approle/role/${name}" \
+    token_policies="${policies}" \
+    token_ttl="${token_ttl}" \
+    token_max_ttl="${token_max_ttl}" \
+    secret_id_num_uses="${secret_id_num_uses}"
+}
+
 # bao_read_field <kv_path> <field>
 # Read a single field from a KV v2 path. Outputs the value to stdout.
 bao_read_field() {
