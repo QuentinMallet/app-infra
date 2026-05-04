@@ -14,12 +14,6 @@ let
 
   appInfraHelpers = pkgs.writeShellScript "app-infra-helpers" (builtins.readFile ./helpers.sh);
 
-  trustDomain =
-    if options ? services && options.services ? spire-infra then
-      config.services.spire-infra.agent.trustDomain
-    else
-      "infra.tailnet";
-
   instanceModule =
     { name, config, ... }:
     {
@@ -34,17 +28,14 @@ let
           };
           address = mkOption {
             type = types.str;
-            default = "https://127.0.0.1:8200";
             description = "OpenBao server address.";
           };
           skipVerify = mkOption {
             type = types.bool;
-            default = false;
             description = "Whether to skip TLS verification for OpenBao.";
           };
           tokenFile = mkOption {
             type = types.str;
-            default = "/var/lib/openbao/provisioner-token";
             description = "Path to the OpenBao provisioner token file.";
           };
           script = mkOption {
@@ -125,15 +116,20 @@ let
         zitadel.enable = mkDefault (config.tier != "core");
         spire.enable = mkDefault (config.tier != "core");
         spire.clientHostName = mkDefault outerConfig.networking.hostName;
+        openbao.address = mkDefault outerConfig.services.app-infra.defaults.openbao.address;
+        openbao.skipVerify = mkDefault outerConfig.services.app-infra.defaults.openbao.skipVerify;
+        openbao.tokenFile = mkDefault outerConfig.services.app-infra.defaults.openbao.tokenFile;
       };
     };
 
-  enabledInstances = filterAttrs (_: inst: inst.enable) cfg;
+  instances = cfg.instances;
 
-  enabledBaoInstances = filterAttrs (_: inst: inst.enable && inst.openbao.enable) cfg;
-  enabledZitInstances = filterAttrs (_: inst: inst.enable && inst.zitadel.enable) cfg;
-  enabledSpireInstances = filterAttrs (_: inst: inst.enable && inst.spire.enable) cfg;
-  runOnDeployInstances = filterAttrs (_: inst: inst.enable && inst.runOnEachDeploy) cfg;
+  enabledInstances = filterAttrs (_: inst: inst.enable) instances;
+
+  enabledBaoInstances = filterAttrs (_: inst: inst.enable && inst.openbao.enable) instances;
+  enabledZitInstances = filterAttrs (_: inst: inst.enable && inst.zitadel.enable) instances;
+  enabledSpireInstances = filterAttrs (_: inst: inst.enable && inst.spire.enable) instances;
+  runOnDeployInstances = filterAttrs (_: inst: inst.enable && inst.runOnEachDeploy) instances;
 
   mkBaoSetupScript =
     name: inst:
@@ -151,7 +147,7 @@ let
       export ZITADEL_URL="${inst.zitadel.address}"
       export APP_NAME="${name}"
       export CLIENT_HOST="${inst.spire.clientHostName}"
-      export SPIFFE_ID="spiffe://${trustDomain}/workload/${name}"
+      export SPIFFE_ID="spiffe://${cfg.trustDomain}/workload/${name}"
       export APP_INFRA_HELPERS="${appInfraHelpers}"
       export PATH="${
         makeBinPath [
@@ -187,7 +183,7 @@ let
         if inst.zitadel.projectName != null then inst.zitadel.projectName else name
       }"
       export CLIENT_HOST="${inst.spire.clientHostName}"
-      export SPIFFE_ID="spiffe://${trustDomain}/workload/${name}"
+      export SPIFFE_ID="spiffe://${cfg.trustDomain}/workload/${name}"
       export APP_INFRA_HELPERS="${appInfraHelpers}"
       export PATH="${
         makeBinPath [
@@ -203,10 +199,36 @@ let
     '';
 in
 {
-  options.services.app-infra = mkOption {
-    type = types.attrsOf (types.submodule instanceModule);
-    default = { };
-    description = "App infrastructure setup instances. Each instance generates systemd oneshot services for OpenBao and Zitadel provisioning.";
+  options.services.app-infra = {
+    trustDomain = mkOption {
+      type = types.str;
+      default = "infra.tailnet";
+      description = "SPIFFE trust domain for this machine.";
+    };
+
+    defaults.openbao = {
+      address = mkOption {
+        type = types.str;
+        default = "https://127.0.0.1:8200";
+        description = "Default OpenBao server address for all instances.";
+      };
+      skipVerify = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Default TLS verification skip setting for all instances.";
+      };
+      tokenFile = mkOption {
+        type = types.str;
+        default = "/var/lib/openbao/provisioner-token";
+        description = "Default OpenBao provisioner token file path for all instances.";
+      };
+    };
+
+    instances = mkOption {
+      type = types.attrsOf (types.submodule instanceModule);
+      default = { };
+      description = "App infrastructure setup instances. Each instance generates systemd oneshot services for OpenBao and Zitadel provisioning.";
+    };
   };
 
   config = mkIf (enabledInstances != { }) (mkMerge [
@@ -283,8 +305,8 @@ in
         concatLists (
           mapAttrsToList (name: inst: [
             {
-              spiffeId = "spiffe://${trustDomain}/workload/${name}";
-              parentId = "spiffe://${trustDomain}/spire/agent/host/${inst.spire.clientHostName}";
+              spiffeId = "spiffe://${cfg.trustDomain}/workload/${name}";
+              parentId = "spiffe://${cfg.trustDomain}/spire/agent/host/${inst.spire.clientHostName}";
               selectors = [ "unix:uid:0" ];
             }
           ]) enabledSpireInstances
