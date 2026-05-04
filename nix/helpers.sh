@@ -18,6 +18,17 @@
 
 set -euo pipefail
 
+# ── Guards ─────────────────────────────────────────────────────────────────────
+
+# require_spiffe_id
+# Abort if SPIFFE_ID env var is unset or empty. Call before bao_ensure_jwt_role.
+require_spiffe_id() {
+  if [[ -z "${SPIFFE_ID:-}" ]]; then
+    echo "ERROR: SPIFFE_ID is unset or empty — cannot create JWT role" >&2
+    exit 1
+  fi
+}
+
 # ── OpenBao helpers ────────────────────────────────────────────────────────────
 
 # bao_ensure_kv_mount <path>
@@ -47,11 +58,11 @@ bao_ensure_policy() {
 # Create or update a JWT auth role on auth/<mount>/role/<name>. Idempotent.
 # Role config: bound_audiences=openbao, user_claim=sub, bound_claims.sub=<spiffe_id>
 # token_policies defaults to <name>; pass explicitly when policy name differs from role name.
-# mount defaults to "jwt"; pass "jwt-spire" for SPIRE workloads.
+# mount defaults to "jwt-spire"; pass "jwt" for Zitadel OIDC human login roles.
 bao_ensure_jwt_role() {
   local name="$1"
   local spiffe_id="$2"
-  local mount="${3:-jwt}"
+  local mount="${3:-jwt-spire}"
   local policies="${4:-${name}}"
   echo "[app-infra] configuring JWT auth role '${name}' for SPIFFE ID '${spiffe_id}' on auth/${mount} (policies=${policies})"
   bao write "auth/${mount}/role/${name}" \

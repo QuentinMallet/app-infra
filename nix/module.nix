@@ -1,9 +1,8 @@
-{
-  lib,
-  pkgs,
-  config,
-  options,
-  ...
+{ lib
+, pkgs
+, config
+, options
+, ...
 }:
 
 with lib;
@@ -43,19 +42,19 @@ let
 
           approle = {
             roleName = mkOption {
-              type        = types.str;
+              type = types.str;
               description = "AppRole role name. Used for core-tier instances.";
             };
             tokenTtl = mkOption {
-              type    = types.str;
+              type = types.str;
               default = "1h";
             };
             tokenMaxTtl = mkOption {
-              type    = types.str;
+              type = types.str;
               default = "4h";
             };
             secretIdNumUses = mkOption {
-              type    = types.int;
+              type = types.int;
               default = 0;
             };
           };
@@ -104,8 +103,8 @@ let
           };
 
           workloadUser = mkOption {
-            type        = types.nullOr types.str;
-            default     = null;
+            type = types.nullOr types.str;
+            default = null;
             description = ''
               Unix user the service process runs as. Used for unix:user SPIRE selector.
               For systemd DynamicUser services: set to null — DynamicUser assigns an
@@ -116,8 +115,8 @@ let
           };
 
           workloadExecutable = mkOption {
-            type        = types.nullOr types.str;
-            default     = null;
+            type = types.nullOr types.str;
+            default = null;
             description = ''
               Absolute path to the binary SPIRE sees via /proc/<pid>/exe.
               Used as the unix:path SPIRE selector. For DynamicUser services,
@@ -128,7 +127,7 @@ let
           };
 
           spiffeIdSuffix = mkOption {
-            type        = types.str;
+            type = types.str;
             description = ''
               Suffix appended to the trust domain for this instance's SPIFFE ID.
               Default: "workload/<name>". Override for legacy paths during migration.
@@ -136,8 +135,8 @@ let
           };
 
           provisioningUser = mkOption {
-            type        = types.nullOr types.str;
-            default     = null;
+            type = types.nullOr types.str;
+            default = null;
             description = ''
               If set, generates a second SPIRE entry for boot-time scripts calling
               spiffe-agent api fetch jwt (e.g. secrets-fetch.sh).
@@ -149,6 +148,7 @@ let
         tier = mkOption {
           type = types.enum [
             "core"
+            "critical"
             "standard"
           ];
           default = "standard";
@@ -160,6 +160,8 @@ let
 
             - core: No auth dependencies (e.g. SPIRE itself, OpenBao itself).
                     Must have spire.enable = false and zitadel.enable = false.
+            - critical: M2M auth via SPIRE JWT → OpenBao auth/jwt-spire. No Zitadel setup.
+                        Must have zitadel.enable = false.
             - standard: M2M auth via SPIRE JWT → OpenBao auth/jwt-spire.
                         May also have Zitadel setup for human user login (OIDC web app).
           '';
@@ -306,79 +308,96 @@ in
   };
 
   config = mkIf (enabledInstances != { }) (mkMerge [
-    # Tier enforcement: core instances must not use SPIRE or Zitadel
+    # Tier enforcement: core instances must not use SPIRE or Zitadel;
+    # critical instances must not use Zitadel
     {
-      assertions = mapAttrsToList (name: inst: {
-        assertion = inst.tier != "core" || (!inst.spire.enable && !inst.zitadel.enable);
-        message = "app-infra: instance '${name}' has tier 'core' but spire.enable or zitadel.enable is true; core instances must have both disabled";
-      }) enabledInstances;
+      assertions = mapAttrsToList
+        (name: inst: {
+          assertion = inst.tier != "core" || (!inst.spire.enable && !inst.zitadel.enable);
+          message = "app-infra: instance '${name}' has tier 'core' but spire.enable or zitadel.enable is true; core instances must have both disabled";
+        })
+        enabledInstances
+      ++ mapAttrsToList
+        (name: inst: {
+          assertion = inst.tier != "critical" || !inst.zitadel.enable;
+          message = "app-infra: instance '${name}' has tier 'critical' but zitadel.enable is true; critical instances must have zitadel.enable = false";
+        })
+        enabledInstances;
     }
 
     # SPIRE workload selector assertion
     {
-      assertions = mapAttrsToList (name: inst: {
-        assertion = !inst.spire.enable
-          || inst.spire.workloadUser != null
-          || inst.spire.workloadExecutable != null;
-        message = "app-infra: instance '${name}' has spire.enable = true but neither workloadUser nor workloadExecutable is set";
-      }) enabledSpireInstances;
+      assertions = mapAttrsToList
+        (name: inst: {
+          assertion = !inst.spire.enable
+            || inst.spire.workloadUser != null
+            || inst.spire.workloadExecutable != null;
+          message = "app-infra: instance '${name}' has spire.enable = true but neither workloadUser nor workloadExecutable is set";
+        })
+        enabledSpireInstances;
     }
 
     # OpenBao setup services
     {
-      systemd.services = mapAttrs' (
-        name: inst:
-        nameValuePair "openbao-setup-${name}" {
-          description = "OpenBao setup for ${name}";
-          after = [
-            "openbao-unseal.service"
-            "network-online.target"
-          ];
-          wants = [ "network-online.target" ];
-          wantedBy = [ "multi-user.target" ];
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-            ExecStart = "+${mkBaoSetupScript name inst}";
-            StateDirectory = "app-infra";
-            StateDirectoryMode = "0700";
-          };
-        }
-      ) enabledBaoInstances;
+      systemd.services = mapAttrs'
+        (
+          name: inst:
+            nameValuePair "openbao-setup-${name}" {
+              description = "OpenBao setup for ${name}";
+              after = [
+                "openbao-unseal.service"
+                "network-online.target"
+              ];
+              wants = [ "network-online.target" ];
+              wantedBy = [ "multi-user.target" ];
+              serviceConfig = {
+                Type = "oneshot";
+                RemainAfterExit = true;
+                ExecStart = "+${mkBaoSetupScript name inst}";
+                StateDirectory = "app-infra";
+                StateDirectoryMode = "0700";
+              };
+            }
+        )
+        enabledBaoInstances;
     }
 
     # Zitadel setup services
     {
-      systemd.services = mapAttrs' (
-        name: inst:
-        nameValuePair "zitadel-setup-${name}" {
-          description = "Zitadel setup for ${name}";
-          after = [
-            "zitadel.service"
-            "openbao-setup-${name}.service"
-            "network-online.target"
-          ];
-          wants = [ "network-online.target" ];
-          wantedBy = [ "multi-user.target" ];
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-            ExecStart = "+${mkZitSetupScript name inst}";
-            StateDirectory = "app-infra";
-            StateDirectoryMode = "0700";
-          };
-        }
-      ) enabledZitInstances;
+      systemd.services = mapAttrs'
+        (
+          name: inst:
+            nameValuePair "zitadel-setup-${name}" {
+              description = "Zitadel setup for ${name}";
+              after = [
+                "zitadel.service"
+                "openbao-setup-${name}.service"
+                "network-online.target"
+              ];
+              wants = [ "network-online.target" ];
+              wantedBy = [ "multi-user.target" ];
+              serviceConfig = {
+                Type = "oneshot";
+                RemainAfterExit = true;
+                ExecStart = "+${mkZitSetupScript name inst}";
+                StateDirectory = "app-infra";
+                StateDirectoryMode = "0700";
+              };
+            }
+        )
+        enabledZitInstances;
     }
 
     # runOnEachDeploy: activation script to remove stamp files
     (mkIf (runOnDeployInstances != { }) {
       system.activationScripts.app-infra-clear-stamps = stringAfter [ "var" ] (
         concatStringsSep "\n" (
-          mapAttrsToList (name: _: ''
-            rm -f /var/lib/app-infra/${name}/openbao.stamp
-            rm -f /var/lib/app-infra/${name}/zitadel.stamp
-          '') runOnDeployInstances
+          mapAttrsToList
+            (name: _: ''
+              rm -f /var/lib/app-infra/${name}/openbao.stamp
+              rm -f /var/lib/app-infra/${name}/zitadel.stamp
+            '')
+            runOnDeployInstances
         )
       );
     })
@@ -387,27 +406,29 @@ in
     (optionalAttrs (options ? services && options.services ? spire-infra) {
       services.spire-infra.server.entries = mkIf (config.services.spire-infra.server.enable or false) (
         concatLists (
-          mapAttrsToList (name: inst:
-            # Runtime entry — unix:user omitted for DynamicUser services (workloadUser = null)
-            [{
-              spiffeId  = "spiffe://${cfg.trustDomain}/${inst.spire.spiffeIdSuffix}";
-              parentId  = "spiffe://${cfg.trustDomain}/spire/agent/host/${inst.spire.clientHostName}";
-              selectors =
-                lib.optional (inst.spire.workloadUser != null)
-                  "unix:user:${inst.spire.workloadUser}"
-                ++ lib.optional (inst.spire.workloadExecutable != null)
-                  "unix:path:${inst.spire.workloadExecutable}";
-            }]
-            # Provisioning entry (spiffe-agent-based secret fetch scripts)
-            ++ lib.optional (inst.spire.provisioningUser != null) {
-              spiffeId  = "spiffe://${cfg.trustDomain}/${inst.spire.spiffeIdSuffix}";
-              parentId  = "spiffe://${cfg.trustDomain}/spire/agent/host/${inst.spire.clientHostName}";
-              selectors = [
-                "unix:user:${inst.spire.provisioningUser}"
-                "unix:path:${pkgs.spire}/bin/spiffe-agent"
-              ];
-            }
-          ) enabledSpireInstances
+          mapAttrsToList
+            (name: inst:
+              # Runtime entry — unix:user omitted for DynamicUser services (workloadUser = null)
+              [{
+                spiffeId = "spiffe://${cfg.trustDomain}/${inst.spire.spiffeIdSuffix}";
+                parentId = "spiffe://${cfg.trustDomain}/spire/agent/host/${inst.spire.clientHostName}";
+                selectors =
+                  lib.optional (inst.spire.workloadUser != null)
+                    "unix:user:${inst.spire.workloadUser}"
+                  ++ lib.optional (inst.spire.workloadExecutable != null)
+                    "unix:path:${inst.spire.workloadExecutable}";
+              }]
+              # Provisioning entry (spiffe-agent-based secret fetch scripts)
+              ++ lib.optional (inst.spire.provisioningUser != null) {
+                spiffeId = "spiffe://${cfg.trustDomain}/${inst.spire.spiffeIdSuffix}";
+                parentId = "spiffe://${cfg.trustDomain}/spire/agent/host/${inst.spire.clientHostName}";
+                selectors = [
+                  "unix:user:${inst.spire.provisioningUser}"
+                  "unix:path:${pkgs.spire}/bin/spiffe-agent"
+                ];
+              }
+            )
+            enabledSpireInstances
         )
       );
     })
