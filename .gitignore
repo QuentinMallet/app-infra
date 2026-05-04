@@ -1,0 +1,18 @@
+result
+result-*
+# .omc: explicitly ignore ephemeral dirs, persistent artifacts tracked by default
+# Using **/.omc/<dir> patterns covers both root and nested .omc/ dirs.
+# Trade-off: must update this list if new ephemeral dirs are added to .omc/
+**/.omc/state/
+**/.omc/sessions/
+**/.omc/autopilot/
+**/.omc/drafts/
+**/.omc/handoffs/
+**/.omc/logs/
+**/.omc/research/
+**/.omc/prd*.json
+**/.omc/progress.txt
+.worktrees/
+.claude/backups/
+
+.agent_key
