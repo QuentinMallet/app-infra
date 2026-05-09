@@ -24,6 +24,10 @@
           );
         in
         "${erlangPkg}/lib/erlang/${erts}/bin/beam.smp";
+
+      # mkApparmorProfile: generate a security.apparmor.policies attrset for a BEAM service.
+      # See lib/apparmor.nix for full documentation and parameter reference.
+      mkApparmorProfile = import ./lib/apparmor.nix { inherit lib; };
     in
     (flakelight ./. {
       # nixosModule (singular) → outputs.nixosModules.default
@@ -34,6 +38,6 @@
         pkgs: pkgs.writeShellScript "app-infra-helpers" (builtins.readFile ./nix/helpers.sh);
     })
     // {
-      lib = { inherit beamSmpPath; };
+      lib = { inherit beamSmpPath mkApparmorProfile; };
     };
 }
