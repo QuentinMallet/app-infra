@@ -70,7 +70,6 @@ let
       network inet6 dgram,
       network unix stream,
       network unix dgram,
-      /tmp/erl_* rwk,
 
       # App data directory
       ${dataDir}/ r,
