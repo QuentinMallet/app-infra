@@ -289,7 +289,7 @@ zitadel_ensure_machine_user() {
     -X POST \
     -H "Authorization: Bearer ${ZITADEL_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d "{\"userName\":\"${username}\",\"profile\":{\"displayName\":\"${username}\"}}" \
+    -d "{\"userName\":\"${username}\",\"name\":\"${username}\",\"profile\":{\"displayName\":\"${username}\"}}" \
     "${ZITADEL_URL}/management/v1/users/machine")
 
   echo "${create_response}" | jq -r '.userId'
